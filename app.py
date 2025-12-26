@@ -13,22 +13,24 @@ from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 import zipfile
-
+import random
+import time
 
 app = Flask(__name__)
 
 
 CORS(app) #add origins When frontend is up
-BLACK = (0,0,0)
-GRAY = (51,51,51)
+EDGE_COLOR = config.EDGE_COLOR
+ICON_COLOR = config.ICON_COLOR
 
 #ideviceisntaller
-def get_app_names():
+def get_icons():
     
     load_dotenv()
     IDEVICEINSTALLER_PATH = os.getenv('IDEVICEINSTALLER_PATH')
     result = subprocess.run( [IDEVICEINSTALLER_PATH, "list"], capture_output=True, text=True, check=False )
     
+    app_urls = []
     app_names = []
     
     with io.StringIO(result.stdout) as f:
@@ -39,45 +41,55 @@ def get_app_names():
         for row in reader:
             #Ensure no dups check manifest
             if len(row) == 3:
-                app_names.append( row[2].strip().strip('"'))
+                app_name = row[2].strip().strip('"')
+                icon_url = fetch_icon_url(app_name)
+                
+                if icon_url:
+                    app_names.append(app_name)
+                    app_urls.append(icon_url)
+                else:
+                    print(f"Skipping {app_name}: no Icon URL")
             
-    return app_names
+    return app_urls, app_names
 
-#itunes
-def get_icon_urls():
-    app_names = get_app_names()
+
+def fetch_icon_url(app_name, max_retries=5):
+    
     url = config.BASE_URL
-
-    icon_urls = []
-
-    for name in app_names:
+    delay = 4
         
-        params = {
-        "term" : name,
-        "entity" : config.ENTITY,
-        "media" : config.MEDIA,
-        "country" : config.COUNTRY,
-        "limit" : config.LIMIT
-        }
-        
-        delay = 20
+    params = {
+            "term" : app_name,
+            "entity" : config.ENTITY,
+            "media" : config.MEDIA,
+            "country" : config.COUNTRY,
+            "limit" : config.LIMIT
+            }    
+    
+    for retry in range(max_retries):
         
         try:
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=10)
             
             if response.status_code == 200:
-                icon_url = response.json()
+                raw_data = response.json()
+                if raw_data["results"]:
+                    return raw_data["results"][0]["artworkUrl512"]
+                return None
+            
+            if response.status_code in config.RETRYABGLE_STATUS_CODE:
+                sleep_time = delay + random.uniform(0, 0.67)
+                print("Atempt:", retry, " Sleeping for: ", sleep_time)
+                time.sleep(sleep_time)
+                delay *= 2
+                continue
                 
-                icon_urls.append(icon_url["results"][0]["artworkUrl512"])
-            else:
-                print("Error: ", response.status_code)
+            response.raise_for_status()
             
         except requests.RequestException as e:
             print("error", e)
     
-    return icon_urls, app_names    
-    
-    
+    raise RuntimeError(f"Failed to fetch icon URL for {app_name}")
     
 def process_icon(app_name, image, target_size=1024):
     
@@ -95,8 +107,8 @@ def process_icon(app_name, image, target_size=1024):
     
     out_rgb = np.zeros((target_size, target_size, 3), dtype=np.uint8 )
     
-    out_rgb[is_icon] = GRAY
-    out_rgb[~is_icon] = BLACK
+    out_rgb[is_icon] = ICON_COLOR
+    out_rgb[~is_icon] = EDGE_COLOR
     
     final_img = np.dstack([out_rgb, og_a])
     
@@ -119,10 +131,10 @@ def zipped_dir(zip_path, dir_path):
                 z.write(full_path, arcname)
     
 
-@app.route("/process", methods=["GET"])
+@app.route("/latest", methods=["GET"])
 def return_icons_endpoint():
     
-    icon_urls, app_names = get_icon_urls()
+    icon_urls, app_names = get_icons()
         
     now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
@@ -131,10 +143,9 @@ def return_icons_endpoint():
     
 
     for icon_url, app_name in zip(icon_urls, app_names):
-        response = requests.get(icon_url)
+        response = requests.get(icon_url, timeout=10)
         response.raise_for_status()
                 
-            
         try:
             #ensure format patches whats returned
             processed_img = process_icon(app_name, response.content, target_size=1024)
