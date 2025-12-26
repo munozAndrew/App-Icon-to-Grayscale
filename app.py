@@ -10,6 +10,10 @@ from dotenv import load_dotenv
 import os
 import config
 from io import BytesIO
+from datetime import datetime
+from pathlib import Path
+import zipfile
+
 
 app = Flask(__name__)
 
@@ -33,13 +37,14 @@ def get_app_names():
         next(reader, None)
         
         for row in reader:
+            #Ensure no dups check manifest
             if len(row) == 3:
                 app_names.append( row[2].strip().strip('"'))
             
     return app_names
 
 #itunes
-def get_icons():
+def get_icon_urls():
     app_names = get_app_names()
     url = config.BASE_URL
 
@@ -47,8 +52,6 @@ def get_icons():
 
     for name in app_names:
         
-    
-    
         params = {
         "term" : name,
         "entity" : config.ENTITY,
@@ -56,6 +59,8 @@ def get_icons():
         "country" : config.COUNTRY,
         "limit" : config.LIMIT
         }
+        
+        delay = 20
         
         try:
             response = requests.get(url, params=params)
@@ -70,11 +75,11 @@ def get_icons():
         except requests.RequestException as e:
             print("error", e)
     
-    return icon_urls    
+    return icon_urls, app_names    
     
     
     
-def process_icon(image, target_size=1024):
+def process_icon(app_name, image, target_size=1024):
     
     #img = Image.open(image_file).convert("RGBA")
     img = Image.open(BytesIO(image)).convert("RGBA")
@@ -95,50 +100,66 @@ def process_icon(image, target_size=1024):
     
     final_img = np.dstack([out_rgb, og_a])
     
+
+    
     return Image.fromarray(final_img, mode="RGBA")
 
+def zipped_dir(zip_path, dir_path):
+    
+    #try ZIP_STORED
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+        
+        #expandable in the future
+        #think Sectioning based on App details
+        for root, dirs, files in os.walk(dir_path):
+            
+            for file in files: 
+                full_path = os.path.join(root, file)
+                arcname = os.path.relpath(full_path, dir_path) # storage/MMHHDD/insta.png -> insta.png
+                z.write(full_path, arcname)
+    
 
- 
-@app.route("/process-icon", methods=["POST"])
-def process_icon_endpoint():
+@app.route("/process", methods=["GET"])
+def return_icons_endpoint():
     
-    icon_urls = get_icons()
-    icon_imgs = []
+    icon_urls, app_names = get_icon_urls()
+        
+    now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    dir_path = Path("Storage", now)
+    dir_path.mkdir(parents=True, exist_ok=True)
     
-    for icon_url in icon_urls:
+
+    for icon_url, app_name in zip(icon_urls, app_names):
         response = requests.get(icon_url)
         response.raise_for_status()
-        
-        #img = Image.open(BytesIO(response.content))
-            
+                
             
         try:
-            '''
-            if "icon" not in request.files:
-                print("STUCK")
-                return jsonify({"error":"Noicon file provided"}), 400
+            #ensure format patches whats returned
+            processed_img = process_icon(app_name, response.content, target_size=1024)
             
-            file = request.files["icon"]
-            
-            if file.filename == "":
-                return jsonify({"error":"Nofilename provided"}), 400
-            '''
-            
-            processed_img = process_icon(response.content, target_size=1024)
-            
-            img_io = io.BytesIO()
-            processed_img.save(img_io, "PNG", optimize=True)
-            img_io.seek(0)
-            
-            #returns a single image currently 
-            
-            return send_file(img_io, mimetype="image/png")        
+            file_path = dir_path / f"{app_name}_dark.png"
+            processed_img.save(file_path, format="PNG")  
             
             
         except Exception as e:
             print("Error: ", e)
             return jsonify({"error": str(e)}), 500
-        
+    
+    
+    zip_path = Path("Storage", f"{now}.zip")
+    
+    zipped_dir(zip_path, dir_path)
+    
+    return send_file(
+        f"{now}.zip",
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"{now}.zip"
+    )
+    
+ 
 @app.route("/health", methods=["GET"])
 def health_check():
     return jsonify({"status": "mmm", "service": "icon-gen"})       
