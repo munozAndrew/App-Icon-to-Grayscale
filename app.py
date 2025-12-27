@@ -29,6 +29,7 @@ def get_icons():
     load_dotenv()
     IDEVICEINSTALLER_PATH = os.getenv('IDEVICEINSTALLER_PATH')
     result = subprocess.run( [IDEVICEINSTALLER_PATH, "list"], capture_output=True, text=True, check=False )
+    #print(result)
     
     app_urls = []
     app_names = []
@@ -42,6 +43,11 @@ def get_icons():
             #Ensure no dups check manifest
             if len(row) == 3:
                 app_name = row[2].strip().strip('"')
+                
+                #print("Current App Name:", app_name)
+                #print("repr:", repr(app_name))
+                #print("chars:", [hex(ord(c)) for c in app_name])
+                
                 icon_url = fetch_icon_url(app_name)
                 
                 if icon_url:
@@ -53,11 +59,12 @@ def get_icons():
     return app_urls, app_names
 
 
-def fetch_icon_url(app_name, max_retries=5):
+def fetch_icon_url(app_name, max_retries=7):
     
     url = config.BASE_URL
     delay = 4
-        
+    print(app_name)
+    
     params = {
             "term" : app_name,
             "entity" : config.ENTITY,
@@ -73,8 +80,13 @@ def fetch_icon_url(app_name, max_retries=5):
             
             if response.status_code == 200:
                 raw_data = response.json()
+                
+                if app_name == "Pass&Docs":
+                    print(raw_data)
+                
                 if raw_data["results"]:
                     return raw_data["results"][0]["artworkUrl512"]
+                
                 return None
             
             if response.status_code in config.RETRYABGLE_STATUS_CODE:
@@ -164,7 +176,7 @@ def return_icons_endpoint():
     zipped_dir(zip_path, dir_path)
     
     return send_file(
-        f"{now}.zip",
+        zip_path,
         mimetype="application/zip",
         as_attachment=True,
         download_name=f"{now}.zip"
