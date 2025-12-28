@@ -81,8 +81,7 @@ You’ll need to set the path to `ideviceinstaller`:
 
 ```bash
 IDEVICEINSTALLER_PATH=path/to/ideviceinstaller.exe
-
-## How I Use This
+```
 
 1. Plug in my iPhone  
 2. Start the server  
@@ -94,13 +93,9 @@ If I install new apps, I just rerun it.
 
 ---
 
-## Why I Built This
-
 I wanted a **minimal home screen** without manually editing icons every time something changed. This automates a process I actually use.
 
 ---
-
-## Next Changes
 
 - Save a manifest so icons are only created for new apps
 - Support multiple themes
