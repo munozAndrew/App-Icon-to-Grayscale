@@ -143,10 +143,12 @@ def zipped_dir(zip_path, dir_path):
                 z.write(full_path, arcname)
     
 
-@app.route("/latest", methods=["GET"])
+@app.route("/build", methods=["POST"])
 def return_icons_endpoint():
     
     icon_urls, app_names = get_icons()
+    
+    print("Drafting Icons now...")
         
     now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
@@ -175,13 +177,21 @@ def return_icons_endpoint():
     
     zipped_dir(zip_path, dir_path)
     
+    #cache / save zipped_dir
+    
+    
+
+@app.route("/latest", methods=["GET"])
+def return_zipped_file():
+    
+    #grab the zipped dir that we want to return
+
     return send_file(
         zip_path,
         mimetype="application/zip",
         as_attachment=True,
         download_name=f"{now}.zip"
-    )
-    
+    )    
  
 @app.route("/health", methods=["GET"])
 def health_check():
