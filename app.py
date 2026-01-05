@@ -17,9 +17,18 @@ import random
 import time
 import uuid
 import threading 
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 app = Flask(__name__)
 
+session = requests.Session()
+retries = Retry(total=5, backoff_factor=2, status_forcelist=[500, 502, 503, 504, 429], allowed_methods=["GET"], raise_on_status=False)
+#depending on read / Status / connection retries
+
+adapter = HTTPAdapter(max_retries=retries, pool_connections=1, pool_maxsize=1)
+session.mount("https://", adapter)
+session.mount("http://", adapter)
 
 CORS(app) #add origins When frontend is up
 EDGE_COLOR = config.EDGE_COLOR
@@ -61,7 +70,7 @@ def get_icons():
             
     return app_urls, app_names
 
-def fetch_icon_url(app_name, max_retries=7):
+def fetch_icon_url(app_name):
     
     url = config.BASE_URL
     delay = 4
@@ -75,33 +84,25 @@ def fetch_icon_url(app_name, max_retries=7):
             "limit" : config.LIMIT
             }    
     
-    for retry in range(max_retries):
         
-        try:
-            response = requests.get(url, params=params, timeout=10)
+    try:
+        response = session.get(url, params=params, timeout=10)
+        
+        if response.status_code == 200:
+            raw_data = response.json()
             
-            if response.status_code == 200:
-                raw_data = response.json()
-                
-                if app_name == "Pass&Docs":
-                    print(raw_data)
-                
-                if raw_data["results"]:
-                    return raw_data["results"][0]["artworkUrl512"]
-                
-                return None
+            if app_name == "Pass&Docs":
+                print(raw_data)
             
-            if response.status_code in config.RETRYABGLE_STATUS_CODE:
-                sleep_time = delay + random.uniform(0, 0.67)
-                print("Atempt:", retry, " Sleeping for: ", sleep_time)
-                time.sleep(sleep_time)
-                delay *= 2
-                continue
-                
-            response.raise_for_status()
+            if raw_data["results"]:
+                return raw_data["results"][0]["artworkUrl512"]
             
-        except requests.RequestException as e:
-            print("error", e)
+            return None
+            
+        response.raise_for_status()
+        
+    except requests.RequestException as e:
+        print("error", e)
     
     raise RuntimeError(f"Failed to fetch icon URL for {app_name}")
     
@@ -156,9 +157,11 @@ def run_generate_job(job_id):
         dir_path = Path("Storage", job_id)
         dir_path.mkdir(parents=True, exist_ok=True)
         
+        
+        
 
         for icon_url, app_name in zip(icon_urls, app_names):
-            response = requests.get(icon_url, timeout=10)
+            response = session.get(icon_url, timeout=10)
             response.raise_for_status()
                     
             try:
