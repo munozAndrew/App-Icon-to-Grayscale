@@ -15,6 +15,8 @@ from pathlib import Path
 import zipfile
 import random
 import time
+import uuid
+import threading 
 
 app = Flask(__name__)
 
@@ -22,6 +24,7 @@ app = Flask(__name__)
 CORS(app) #add origins When frontend is up
 EDGE_COLOR = config.EDGE_COLOR
 ICON_COLOR = config.ICON_COLOR
+jobs = {} # job_id: {status: , zip_path: , timestamp: }
 
 #ideviceisntaller
 def get_icons():
@@ -57,7 +60,6 @@ def get_icons():
                     print(f"Skipping {app_name}: no Icon URL")
             
     return app_urls, app_names
-
 
 def fetch_icon_url(app_name, max_retries=7):
     
@@ -142,56 +144,91 @@ def zipped_dir(zip_path, dir_path):
                 arcname = os.path.relpath(full_path, dir_path) # storage/MMHHDD/insta.png -> insta.png
                 z.write(full_path, arcname)
     
-
-@app.route("/build", methods=["POST"])
-def return_icons_endpoint():
-    
-    icon_urls, app_names = get_icons()
-    
-    print("Drafting Icons now...")
+def run_generate_job(job_id):
+    try:
+        jobs[job_id]["status"] = "in_progress"
+        icon_urls, app_names = get_icons()
         
-    now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        print("Drafting Icons now...")
+            
+        jobs[job_id]["timestamp"] = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    dir_path = Path("Storage", now)
-    dir_path.mkdir(parents=True, exist_ok=True)
-    
+        dir_path = Path("Storage", job_id)
+        dir_path.mkdir(parents=True, exist_ok=True)
+        
 
-    for icon_url, app_name in zip(icon_urls, app_names):
-        response = requests.get(icon_url, timeout=10)
-        response.raise_for_status()
+        for icon_url, app_name in zip(icon_urls, app_names):
+            response = requests.get(icon_url, timeout=10)
+            response.raise_for_status()
+                    
+            try:
+                #ensure format patches whats returned
+                processed_img = process_icon(app_name, response.content, target_size=1024)
                 
-        try:
-            #ensure format patches whats returned
-            processed_img = process_icon(app_name, response.content, target_size=1024)
-            
-            file_path = dir_path / f"{app_name}_dark.png"
-            processed_img.save(file_path, format="PNG")  
-            
-            
-        except Exception as e:
-            print("Error: ", e)
-            return jsonify({"error": str(e)}), 500
-    
-    
-    zip_path = Path("Storage", f"{now}.zip")
-    
-    zipped_dir(zip_path, dir_path)
-    
-    #cache / save zipped_dir
-    
-    
+                file_path = dir_path / f"{app_name}_dark.png"
+                processed_img.save(file_path, format="PNG")  
+                
+                
+            except Exception as e:
+                print("Error: ", e)
+                #jobs[job_id]["status"] = "failed"
+                continue
+        
+        filename = f"{job_id}_{jobs[job_id]['timestamp']}.zip"
+        zip_path = Path("Storage", filename)
+        zipped_dir(zip_path, dir_path)
 
-@app.route("/latest", methods=["GET"])
-def return_zipped_file():
-    
-    #grab the zipped dir that we want to return
+        jobs[job_id]['zip_path'] = str(zip_path)
+        jobs[job_id]['status'] = "completed"
 
-    return send_file(
-        zip_path,
-        mimetype="application/zip",
-        as_attachment=True,
-        download_name=f"{now}.zip"
-    )    
+        
+    except Exception as e:
+        print("Job Error: ", e)
+        jobs[job_id]["status"] = "failed"
+           
+@app.route("/generate", methods=["POST"])
+def generate():
+    
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "queued", "zip_path": None, "timestamp": None}
+
+    thread = threading.Thread(target=run_generate_job, args=(job_id,), daemon=True)
+    thread.start()
+    
+    return jsonify({"job_id": job_id}), 202
+
+
+@app.route("/status/<job_id>", methods=["GET"])
+def job_status(job_id):
+    job = jobs.get(job_id)
+    if job:
+        return jsonify({ "job_id": job_id, "status": job["status"]})
+    else:
+        return jsonify({"error": "Job ID not found"}), 404
+
+@app.route("/result/<job_id>", methods=["GET"])
+def job_result(job_id):
+    job = jobs.get(job_id)
+    if job and job["status"] == "completed":
+        return send_file(
+            Path(job['zip_path']),
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"{job['timestamp']}.zip"
+        )
+        
+    else:
+        return jsonify({"error": "Job not completed or not found"}), 404
+
+@app.route("/downloaded/<job_id>", methods=["POST"])
+def job_downloaded(job_id):
+    job = jobs.get(job_id)
+    if job:
+        del jobs[job_id]
+        return jsonify({"message": "Job data cleaned up"}), 200
+    else:
+        return jsonify({"error": "Job ID not found"}), 404
+    
  
 @app.route("/health", methods=["GET"])
 def health_check():
